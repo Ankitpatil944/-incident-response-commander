@@ -41,8 +41,8 @@ def test_easy_incident_can_score_perfectly():
 
     assert reward == 0.2
     assert done is True
-    assert observation.reward_breakdown.final_score == 1.0
-    assert info["score"] == 1.0
+    assert observation.reward_breakdown.final_score == 0.99
+    assert info["score"] == 0.99
 
 
 def test_repeated_action_accumulates_penalty():

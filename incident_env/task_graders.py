@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from incident_env.graders import grade_state
+from incident_env.graders import clamp_task_score, grade_state
 from incident_env.models import IncidentObservation, IncidentScenario, IncidentState
 from incident_env.tasks.scenarios import INCIDENT_SCENARIOS
 
@@ -12,7 +12,7 @@ SCENARIO_BY_ID = {scenario.incident_id: scenario for scenario in INCIDENT_SCENAR
 
 
 def _clamp_score(value: float) -> float:
-    return round(max(0.0, min(1.0, value)), 2)
+    return clamp_task_score(value)
 
 
 def _scenario_from_payload(

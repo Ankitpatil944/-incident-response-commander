@@ -7,6 +7,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from incident_env.env import IncidentCommanderEnv
+from incident_env.graders import clamp_task_score
 from incident_env.models import IncidentAction, IncidentStatusUpdate, ResponseTeam, SeverityLevel
 from incident_env.tasks.catalog import TASK_ORDER
 
@@ -322,7 +323,7 @@ def main() -> None:
                     f"[STEP] step={step_count} action={action_to_log(action)} reward={format_reward(reward)} "
                     f"done={'true' if done else 'false'} error={error}"
                 )
-                score = float(info["score"])
+                score = clamp_task_score(float(info["score"]))
                 if done:
                     break
             success = score >= 0.8

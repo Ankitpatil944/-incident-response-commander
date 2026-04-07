@@ -3,6 +3,10 @@ from __future__ import annotations
 from incident_env.models import IncidentScenario, IncidentState, IncidentStatusUpdate
 
 
+def clamp_task_score(value: float) -> float:
+    return round(max(0.01, min(0.99, value)), 2)
+
+
 def _normalize_text(value: str) -> str:
     return " ".join(value.lower().split())
 
@@ -108,4 +112,4 @@ def grade_state(state: IncidentState, scenario: IncidentScenario) -> float:
         team_correct=team_correct,
     )
     final_score = severity_score + team_score + escalation_score + communication_score - state.penalty_total
-    return round(max(0.0, min(final_score, 1.0)), 2)
+    return clamp_task_score(final_score)
