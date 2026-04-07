@@ -1,0 +1,13 @@
+spec_version: 1
+name: Incident Response Commander
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
+tasks:
+  - id: easy_triage
+    grader: incident_env.task_graders:EasyGrader
+  - id: medium_coordination
+    grader: incident_env.task_graders:MediumGrader
+  - id: hard_conflict
+    grader: incident_env.task_graders:HardGrader

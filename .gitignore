@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
+*.pyd
+.coverage
+dist/
+build/
+outputs/
+.env
+.env.local
+.env.*.local
+.uv-cache/
+*.egg-info/
