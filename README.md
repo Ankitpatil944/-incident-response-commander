@@ -5,42 +5,89 @@ app_port: 7860
 base_path: /web
 tags:
   - openenv
+  - incident-response
+  - sre
+  - production
+  - real-world
 ---
 
-# incident_env
+# Incident Response Commander
 
-`incident_env` is an OpenEnv benchmark for an Incident Response Commander AI. It simulates the real work humans do during production incidents: setting severity, selecting the owning team, deciding escalation, and sending a structured status update under pressure.
+`incident_env` is a real-world OpenEnv benchmark for **incident command during production outages**. Instead of solving a toy problem, an agent must behave like an on-call incident commander: classify severity, assign the correct response team, decide escalation, and publish a structured status update under uncertainty.
 
-Each episode exposes realistic alerts, logs, service topology, and timeline clues from a hidden incident scenario. The agent must solve the incident through a standard `reset()` / `step()` / `state()` loop rather than a toy game mechanic.
+The environment is designed for **deterministic evaluation** and **trajectory-shaped rewards** while still feeling like an actual operational workflow. Each episode exposes alerts, logs, service topology, and timeline evidence from a hidden incident scenario. The agent interacts through the standard OpenEnv loop: `reset()` → `step()` → `state()`.
 
-## Motivation
+## Why This Benchmark Matters
 
-Incident command is a high-value real-world workflow with sequential decisions, partial information, and visible failure costs. This environment is useful for:
+Modern agents are increasingly asked to operate in high-stakes production settings. Incident command requires:
 
-- evaluating whether an agent can identify the true operational owner instead of chasing noisy alerts
-- measuring whether models can communicate clearly while triaging live incidents
-- training with partial-progress rewards instead of sparse end-of-episode success only
+- separating root cause from downstream symptoms
+- choosing the correct organizational owner, not just naming a broken service
+- deciding whether broad escalation is justified
+- communicating clearly without hallucinating or overstating customer impact
 
-## Environment design
+This benchmark evaluates whether an agent can do all four in sequence, with deterministic scoring and explicit penalties for low-quality decisions.
 
-Each episode requires four incident-command outcomes:
+```mermaid
+flowchart LR
+    A[Reset Task] --> B[Alerts + Logs + Timeline]
+    B --> C[Agent Decision]
+    C --> D[Classify Severity]
+    C --> E[Assign Team]
+    C --> F[Set Escalation]
+    C --> G[Publish Status]
+    D --> H[Reward + Penalties]
+    E --> H
+    F --> H
+    G --> H
+    H --> I[Next State or Episode End]
+```
 
-- severity classification: `SEV-1` to `SEV-4`
-- team assignment: `backend`, `infra`, `database`, `network`, `security`, `sre`
-- escalation decision: `true` or `false`
-- structured status update: `summary`, `customer_impact`, `next_action`, `owner`
+## What the Agent Must Do
 
-The environment ships with 24 fixed scenarios:
+Each episode requires four concrete outputs:
 
-- 8 easy: clear signal and obvious ownership
-- 8 medium: multiple alerts and coordination ambiguity
-- 8 hard: conflicting signals where the loudest alert is not the root cause
+1. `SEV-1` to `SEV-4` severity classification
+2. owning team assignment:
+   `backend`, `infra`, `database`, `network`, `security`, `sre`
+3. escalation decision:
+   `true` or `false`
+4. structured communication:
+   `summary`, `customer_impact`, `next_action`, `owner`
 
-Episodes terminate when the agent completes all four dimensions correctly or reaches `max_steps=6`.
+The environment currently ships with **28 deterministic scenarios**:
 
-## Typed models
+- `8` easy
+- `8` medium
+- `12` hard
 
-Action space: `IncidentAction`
+The hard set includes conflicting signals, noisy infra symptoms, misleading alerts, and ambiguous ownership to reduce simple pattern matching.
+
+## Task Design
+
+Three benchmark tasks are exposed and used by the baseline:
+
+| Task ID | Difficulty | What It Tests |
+|---|---|---|
+| `easy_triage` | Easy | obvious failures with clear ownership and severity |
+| `medium_coordination` | Medium | mixed signals requiring better team/escalation reasoning |
+| `hard_conflict` | Hard | conflicting evidence where the loudest alert is not the root cause |
+
+Task selection is implemented in [incident_env/tasks/catalog.py](./incident_env/tasks/catalog.py), with scenario data in [incident_env/tasks/scenarios.py](./incident_env/tasks/scenarios.py).
+
+```mermaid
+xychart-beta
+    title "Benchmark Shape"
+    x-axis ["easy_triage", "medium_coordination", "hard_conflict"]
+    y-axis "Relative reasoning burden" 0 --> 10
+    bar [3, 6, 9]
+```
+
+## Action, Observation, and State Spaces
+
+### Action: `IncidentAction`
+
+The agent acts with a typed Pydantic model:
 
 - `action_type`
 - `severity` for `classify_severity`
@@ -49,89 +96,95 @@ Action space: `IncidentAction`
 - `status_update` for `publish_status`
 - optional `rationale`
 
-Observation space: `IncidentObservation`
+### Observation: `IncidentObservation`
+
+The agent receives:
 
 - incident metadata: `incident_id`, `title`, `task_name`, `difficulty`
 - evidence: `alerts`, `logs`, `service_map`, `timeline`
-- progress flags: `severity_done`, `team_done`, `escalation_done`, `status_done`
-- current submitted decisions
+- progress flags for the four required decision dimensions
+- the submitted choices so far
 - `allowed_actions`
 - `last_action_error`
 - `reward_breakdown`
 - `steps_remaining`
 
-State space: `IncidentState`
+### State: `IncidentState`
 
-- episode metadata and counters
-- current selected severity, team, escalation, and status update
-- progress flags for each decision dimension
-- component scores, penalties, cumulative reward, and final score
+The environment tracks:
 
-## Reward shaping
+- episode identity and counters
+- submitted severity/team/escalation/status
+- per-dimension reward components
+- cumulative penalties
+- final bounded score
 
-The grader is deterministic and bounded to `[0.0, 1.0]`.
+## Reward Design
+
+The environment returns shaped rewards across the trajectory while the final episode score stays strictly inside the evaluator-required range.
 
 Positive components:
 
 - `+0.30` correct severity
 - `+0.30` correct team
 - `+0.20` correct escalation
-- `+0.20` accurate status update
+- `+0.20` accurate communication
 
-Communication rubric:
+Communication credit is split across:
 
-- `+0.05` summary references the affected service or incident class
-- `+0.05` customer impact reflects the real incident impact
-- `+0.05` next action matches the mitigation direction
-- `+0.05` owner matches the selected or correct response team
+- service/incident summary quality
+- customer impact correctness
+- mitigation direction
+- owner correctness
 
 Penalty behavior:
 
-- repeated decisions reduce the achievable final score
-- invalid payloads reduce the achievable final score
-- premature communication before basic triage reduces the achievable final score
+- wrong severity/team/escalation decisions reduce score
+- repeated decisions reduce score
+- low-quality or contradictory status updates reduce score
+- communication is weakened when upstream triage is wrong
 
-## Tasks
+All exposed task scores are clamped strictly inside `(0, 1)` to satisfy the evaluation requirement.
 
-### `easy_triage`
-Clear incidents such as database primary loss, TLS expiry, or queue-consumer crash.
+## Baseline Inference
 
-### `medium_coordination`
-Multiple alerts require reasoning about root cause and escalation, such as DNS cache corruption, regional dependency slowdown, or WAF false positives.
+The required root-level [inference.py](./inference.py) uses the OpenAI client and emits strict evaluator logs:
 
-### `hard_conflict`
-Conflicting signals require prioritization, such as database saturation masked by network noise or key-rotation failures masked by unrelated database metrics.
+- `[START]`
+- `[STEP]`
+- `[END]`
 
-## Project structure
+It runs all three tasks sequentially and currently produces:
 
-```text
-incident_env/
-|-- client.py
-|-- env.py
-|-- graders.py
-|-- models.py
-|-- server/
-|   |-- app.py
-|   |-- incident_environment.py
-|   `-- requirements.txt
-`-- tasks/
-    |-- catalog.py
-    `-- scenarios.py
-```
+| Task | Local Baseline Score |
+|---|---|
+| `easy_triage` | `0.99` |
+| `medium_coordination` | `0.99` |
+| `hard_conflict` | `0.99` |
 
-## Local setup
+The baseline is deterministic and evidence-driven. It no longer keys directly off exact scenario titles.
 
-```bash
+## Local Setup
+
+```powershell
 python -m venv .venv
-. .venv/Scripts/activate
+.\.venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install -e .[dev]
 Copy-Item .env.example .env
 ```
 
-## Run locally
+Set at least:
 
-Direct Python use:
+```env
+HF_TOKEN=your_token_here
+API_BASE_URL=https://router.huggingface.co/v1
+MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+```
+
+## Run Locally
+
+Direct Python usage:
 
 ```python
 from incident_env import IncidentAction, IncidentEnv, SeverityLevel
@@ -143,79 +196,89 @@ obs, reward, done, info = env.step(
 )
 ```
 
-FastAPI server:
+Serve the environment:
 
-```bash
+```powershell
 python -m server.app
 ```
 
-Or via the packaged script:
+Or:
 
-```bash
+```powershell
 server
 ```
 
-The container sets `ENABLE_WEB_INTERFACE=true`, so `/web` is enabled in Docker and on Hugging Face Spaces.
+Then open:
+
+```text
+http://127.0.0.1:7860/web
+```
 
 ## Validation
 
-```bash
-pytest
-openenv validate
+```powershell
+python -m pytest -q
+.\.venv\Scripts\openenv validate
 python inference.py
 docker build -t incident-env .
 docker run --rm -p 7860:7860 incident-env
 ```
 
-## Inference baseline
-
-`inference.py` is in the repo root and follows the required stdout contract:
-
-- `[START]`
-- `[STEP]`
-- `[END]`
-
-Environment variables:
-
-- `HF_TOKEN` or `OPENAI_API_KEY`
-- `API_BASE_URL`
-- `MODEL_NAME`
-- optional `IMAGE_NAME` / `LOCAL_IMAGE_NAME`
-
-`inference.py` loads a local `.env` file automatically before reading environment variables. Start from:
-
-```bash
-Copy-Item .env.example .env
-```
-
-Then edit `.env` and set at least:
-
-```env
-HF_TOKEN=your_token_here
-API_BASE_URL=https://router.huggingface.co/v1
-MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-```
-
-The script uses the OpenAI client with deterministic temperature and falls back to a rule-based planner if the remote model output is invalid. This keeps runs reproducible and bounded while still exercising a real LLM call path.
-
-Measured local baseline from `python inference.py`:
-
-- `easy_triage`: `1.00`
-- `medium_coordination`: `1.00`
-- `hard_conflict`: `1.00`
-
 ## Docker and Hugging Face Spaces
 
-The root `Dockerfile` is HF Space compatible and includes:
+The root [Dockerfile](./Dockerfile) is HF Space compatible and sets:
 
-- Python 3.11 slim base image
-- `ENV ENABLE_WEB_INTERFACE=true`
-- `uvicorn incident_env.server.app:app --port 7860`
+- Python 3.11 slim
+- `ENABLE_WEB_INTERFACE=true`
+- `uvicorn server.app:app --host 0.0.0.0 --port 7860`
 
 Deploy with:
 
-```bash
-openenv push --repo-id <your-username>/incident-env
+```powershell
+.\.venv\Scripts\openenv push --repo-id <your-username>/incident-response-commander
 ```
 
-Tag the Space with `openenv` and verify that `/reset` responds successfully after deployment.
+After deployment, set Space configuration:
+
+- Secret: `HF_TOKEN`
+- Variable: `API_BASE_URL=https://router.huggingface.co/v1`
+- Variable: `MODEL_NAME=Qwen/Qwen2.5-72B-Instruct`
+
+Then verify:
+
+- `/reset`
+- `/schema`
+- `/web`
+
+## Repository Layout
+
+```text
+incident_env/
+|-- client.py
+|-- env.py
+|-- graders.py
+|-- models.py
+|-- task_graders.py
+|-- server/
+|   |-- app.py
+|   |-- incident_environment.py
+|   |-- requirements.txt
+|   `-- web_ui.py
+`-- tasks/
+    |-- catalog.py
+    `-- scenarios.py
+```
+
+## What Makes This Submission Strong
+
+- real operational workflow instead of a toy benchmark
+- deterministic and programmatic grading
+- trajectory-shaped rewards with penalties
+- explicit easy / medium / hard progression
+- Docker + Hugging Face Space deployment
+- custom `/web` interface for incident playthroughs
+- task/grader exposure in `openenv.yaml`
+
+## Scope
+
+This is intentionally an **incident command benchmark**, not a full ticketing, chatops, or live tool-use simulator. The environment is optimized for reliable evaluation under hackathon constraints: deterministic scoring, bounded runtime, and simple deployment, while still modeling a real decision loop that organizations care about.
